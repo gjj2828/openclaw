@@ -65,6 +65,37 @@ export type AcpSessionRuntimeOptions = {
   backendExtras?: Record<string, string>;
 };
 
+/**
+ * Metadata snapshot saved when a session is pushed into the history queue.
+ * Used to restore per-session settings when switching back.
+ */
+export type SessionHistoryItemMetadata = {
+  systemSent?: boolean;
+  thinkingLevel?: string;
+  verboseLevel?: string;
+  reasoningLevel?: string;
+  ttsAuto?: TtsAutoMode;
+  modelOverride?: string;
+  providerOverride?: string;
+  label?: string;
+};
+
+/**
+ * An entry in the per-SessionKey history queue (LRU ordered, tail = most recent).
+ * Tracks past sessionIds so users can switch between conversations
+ * within the same chat channel + peer identity.
+ */
+export type SessionHistoryItem = {
+  sessionId: string;
+  createdAt: number;
+  /** User-assigned label (future extension). */
+  label?: string;
+  /** Auto-generated title (future extension). */
+  derivedTitle?: string;
+  /** Metadata snapshot captured when this session was deactivated. */
+  metadata?: SessionHistoryItemMetadata;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -171,6 +202,12 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   acp?: SessionAcpMeta;
+  /**
+   * LRU-ordered history of past sessionIds for this SessionKey.
+   * Tail = most recently deactivated. Used by `/sessions` and `/session <n>`
+   * to switch between conversations in chat channels.
+   */
+  sessionHistory?: SessionHistoryItem[];
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {

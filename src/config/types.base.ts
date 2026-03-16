@@ -133,6 +133,12 @@ export type SessionConfig = {
   threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
+  /**
+   * Maximum number of past sessions to keep in the per-key history queue.
+   * Used by `/sessions` and `/session <n>` for in-chat session switching.
+   * Default: 5.
+   */
+  historyLimit?: number;
 };
 
 export type SessionMaintenanceMode = "enforce" | "warn";

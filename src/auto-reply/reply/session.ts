@@ -25,6 +25,7 @@ import {
   resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
+  type SessionHistoryItem,
   type SessionScope,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -51,6 +52,47 @@ import { forkSessionFromParent, resolveParentForkMaxTokens } from "./session-for
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 
 const log = createSubsystemLogger("session-init");
+
+const DEFAULT_SESSION_HISTORY_LIMIT = 5;
+
+/**
+ * Push the current sessionId into the session history queue (LRU).
+ * Captures a metadata snapshot so settings can be restored when switching back.
+ */
+function pushSessionHistory(sessionEntry: SessionEntry, historyLimit: number): void {
+  const currentId = sessionEntry.sessionId;
+  if (!currentId) {
+    return;
+  }
+
+  const item: SessionHistoryItem = {
+    sessionId: currentId,
+    createdAt: sessionEntry.updatedAt ?? Date.now(),
+    label: sessionEntry.label,
+    metadata: {
+      systemSent: sessionEntry.systemSent,
+      thinkingLevel: sessionEntry.thinkingLevel,
+      verboseLevel: sessionEntry.verboseLevel,
+      reasoningLevel: sessionEntry.reasoningLevel,
+      ttsAuto: sessionEntry.ttsAuto,
+      modelOverride: sessionEntry.modelOverride,
+      providerOverride: sessionEntry.providerOverride,
+      label: sessionEntry.label,
+    },
+  };
+
+  const history = sessionEntry.sessionHistory
+    ? sessionEntry.sessionHistory.filter((h) => h.sessionId !== currentId)
+    : [];
+  history.push(item);
+
+  // Evict oldest entries (queue head) when over limit.
+  while (history.length > historyLimit) {
+    history.shift();
+  }
+
+  sessionEntry.sessionHistory = history;
+}
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -193,6 +235,10 @@ export async function initSessionState(params: {
   const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
+  const historyLimit =
+    typeof sessionCfg?.historyLimit === "number" && Number.isFinite(sessionCfg.historyLimit)
+      ? Math.max(1, Math.floor(sessionCfg.historyLimit))
+      : DEFAULT_SESSION_HISTORY_LIMIT;
 
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
   // Stale cache (especially with multiple gateway processes or on Windows where
@@ -355,6 +401,15 @@ export async function initSessionState(params: {
     persistedProviderOverride = entry.providerOverride;
     persistedLabel = entry.label;
   } else {
+    // Push the outgoing session into the LRU history queue so the user can
+    // switch back to it later via `/session <n>` or `/session back`.
+    if (entry?.sessionId) {
+      const historyLimit = sessionCfg?.historyLimit ?? DEFAULT_SESSION_HISTORY_LIMIT;
+      if (historyLimit > 0) {
+        pushSessionHistory(entry, historyLimit);
+      }
+    }
+
     sessionId = crypto.randomUUID();
     isNewSession = true;
     systemSent = false;
@@ -412,6 +467,8 @@ export async function initSessionState(params: {
     updatedAt: Date.now(),
     systemSent,
     abortedLastRun,
+    // Carry over the session history queue across resets so `/sessions` works.
+    sessionHistory: entry?.sessionHistory ?? baseEntry?.sessionHistory,
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
@@ -509,6 +566,14 @@ export async function initSessionState(params: {
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
+    if (previousSessionEntry?.sessionId) {
+      const historyCarrier: SessionEntry = {
+        ...previousSessionEntry,
+        sessionHistory: [...(previousSessionEntry.sessionHistory ?? [])],
+      };
+      pushSessionHistory(historyCarrier, historyLimit);
+      sessionEntry.sessionHistory = historyCarrier.sessionHistory;
+    }
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;

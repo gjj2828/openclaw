@@ -15,7 +15,10 @@ import {
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
+import type { SessionEntry, SessionHistoryItem } from "../../config/sessions.js";
+import { readSessionPreviewItemsFromTranscript } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
+import { formatRelativeTimestamp } from "../../infra/format-time/format-relative.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
@@ -31,12 +34,119 @@ import type { CommandHandler } from "./commands-types.js";
 import { resolveTelegramConversationId } from "./telegram-context.js";
 
 const SESSION_COMMAND_PREFIX = "/session";
+const SESSIONS_COMMAND = "/sessions";
+const DEFAULT_SESSION_HISTORY_LIMIT = 5;
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
 
 function resolveSessionCommandUsage() {
-  return "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)";
+  return "Usage: /session <number|sessionId|back> | /session idle <duration|off> | /session max-age <duration|off>";
+}
+
+function resolveSessionHistoryLimit(params: Parameters<CommandHandler>[0]): number {
+  const limit = params.cfg.session?.historyLimit;
+  return typeof limit === "number" && Number.isFinite(limit)
+    ? Math.max(1, Math.floor(limit))
+    : DEFAULT_SESSION_HISTORY_LIMIT;
+}
+
+function buildSessionHistoryItem(entry: SessionEntry): SessionHistoryItem {
+  return {
+    sessionId: entry.sessionId,
+    createdAt: entry.updatedAt ?? Date.now(),
+    label: entry.label,
+    metadata: {
+      systemSent: entry.systemSent,
+      thinkingLevel: entry.thinkingLevel,
+      verboseLevel: entry.verboseLevel,
+      reasoningLevel: entry.reasoningLevel,
+      ttsAuto: entry.ttsAuto,
+      modelOverride: entry.modelOverride,
+      providerOverride: entry.providerOverride,
+      label: entry.label,
+    },
+  };
+}
+
+function buildSwitchableSessionList(entry: SessionEntry): Array<{
+  sessionId: string;
+  current: boolean;
+  label?: string;
+  createdAt?: number;
+  metadata?: SessionHistoryItem["metadata"];
+}> {
+  const history = (entry.sessionHistory ?? []).toReversed();
+  return [
+    {
+      sessionId: entry.sessionId,
+      current: true,
+      label: entry.label,
+      createdAt: entry.updatedAt,
+      metadata: {
+        systemSent: entry.systemSent,
+        thinkingLevel: entry.thinkingLevel,
+        verboseLevel: entry.verboseLevel,
+        reasoningLevel: entry.reasoningLevel,
+        ttsAuto: entry.ttsAuto,
+        modelOverride: entry.modelOverride,
+        providerOverride: entry.providerOverride,
+        label: entry.label,
+      },
+    },
+    ...history.map((item) => ({
+      sessionId: item.sessionId,
+      current: false,
+      label: item.label,
+      createdAt: item.createdAt,
+      metadata: item.metadata,
+    })),
+  ];
+}
+
+function resolveSessionPreviewLine(params: {
+  sessionId: string;
+  sessionEntry?: SessionEntry;
+  storePath?: string;
+  agentId?: string;
+}): string | undefined {
+  const items = readSessionPreviewItemsFromTranscript(
+    params.sessionId,
+    params.storePath,
+    params.sessionEntry?.sessionId === params.sessionId
+      ? params.sessionEntry.sessionFile
+      : undefined,
+    params.agentId,
+    1,
+    160,
+  );
+  const last = items.at(-1);
+  if (!last?.text) {
+    return undefined;
+  }
+  const prefix =
+    last.role === "user"
+      ? "👤"
+      : last.role === "assistant"
+        ? "🤖"
+        : last.role === "tool"
+          ? "🛠️"
+          : "•";
+  return `${prefix} ${last.text}`;
+}
+
+function applyHistoryMetadata(
+  entry: SessionEntry,
+  metadata?: SessionHistoryItem["metadata"],
+): void {
+  entry.systemSent = metadata?.systemSent ?? false;
+  entry.thinkingLevel = metadata?.thinkingLevel;
+  entry.verboseLevel = metadata?.verboseLevel;
+  entry.reasoningLevel = metadata?.reasoningLevel;
+  entry.ttsAuto = metadata?.ttsAuto;
+  entry.modelOverride = metadata?.modelOverride;
+  entry.providerOverride = metadata?.providerOverride;
+  entry.label = metadata?.label;
 }
 
 function parseSessionDurationMs(raw: string): number {
@@ -343,6 +453,60 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
   };
 };
 
+export const handleSessionsListCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== SESSIONS_COMMAND && !normalized.startsWith(`${SESSIONS_COMMAND} `)) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /sessions from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  if (!params.sessionEntry) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚠️ Session state is unavailable for this conversation." },
+    };
+  }
+
+  const items = buildSwitchableSessionList(params.sessionEntry);
+  const lines = ["📋 Sessions:"];
+  for (const [index, item] of items.entries()) {
+    const when = item.createdAt
+      ? formatRelativeTimestamp(item.createdAt, { dateFallback: true, fallback: "" })
+      : "";
+    const preview = resolveSessionPreviewLine({
+      sessionId: item.sessionId,
+      sessionEntry: item.current ? params.sessionEntry : undefined,
+      storePath: params.storePath,
+      agentId: params.agentId,
+    });
+    const parts = [`${index + 1}.`, item.current ? "[current]" : "", item.sessionId.slice(0, 8)];
+    if (when) {
+      parts.push(`(${when})`);
+    }
+    lines.push(parts.filter(Boolean).join(" "));
+    if (preview) {
+      lines.push(`   ${preview}`);
+    }
+  }
+  if (items.length <= 1) {
+    lines.push("   No previous sessions yet. Use /new to start another one.");
+  } else {
+    lines.push("", "Use /session <number>, /session <sessionId>, or /session back.");
+  }
+
+  return {
+    shouldContinue: false,
+    reply: { text: lines.join("\n") },
+  };
+};
+
 export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -361,10 +525,97 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   const rest = normalized.slice(SESSION_COMMAND_PREFIX.length).trim();
   const tokens = rest.split(/\s+/).filter(Boolean);
   const action = tokens[0]?.toLowerCase();
-  if (action !== SESSION_ACTION_IDLE && action !== SESSION_ACTION_MAX_AGE) {
+
+  if (!action) {
     return {
       shouldContinue: false,
       reply: { text: resolveSessionCommandUsage() },
+    };
+  }
+
+  if (action !== SESSION_ACTION_IDLE && action !== SESSION_ACTION_MAX_AGE) {
+    if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
+      return {
+        shouldContinue: false,
+        reply: { text: "⚠️ Session state is unavailable for this conversation." },
+      };
+    }
+
+    const allItems = buildSwitchableSessionList(params.sessionEntry);
+    const target = (() => {
+      if (action === "back") {
+        return allItems[1];
+      }
+      if (/^\d+$/.test(action)) {
+        const index = Number(action) - 1;
+        return index >= 0 ? allItems[index] : undefined;
+      }
+      const needle = action.toLowerCase();
+      const exact = allItems.find((item) => item.sessionId.toLowerCase() === needle);
+      if (exact) {
+        return exact;
+      }
+      const prefixMatches = allItems.filter((item) =>
+        item.sessionId.toLowerCase().startsWith(needle),
+      );
+      return prefixMatches.length === 1 ? prefixMatches[0] : undefined;
+    })();
+
+    if (!target) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text:
+            action === "back"
+              ? "ℹ️ There is no previous session to switch back to."
+              : `⚠️ Session not found: ${tokens[0]}. Use /sessions to list available sessions.`,
+        },
+      };
+    }
+
+    if (target.sessionId === params.sessionEntry.sessionId) {
+      return {
+        shouldContinue: false,
+        reply: { text: "ℹ️ Already in that session." },
+      };
+    }
+
+    const historyLimit = resolveSessionHistoryLimit(params);
+    const currentItem = buildSessionHistoryItem(params.sessionEntry);
+    const nextHistory = (params.sessionEntry.sessionHistory ?? []).filter(
+      (item) => item.sessionId !== currentItem.sessionId && item.sessionId !== target.sessionId,
+    );
+    nextHistory.push(currentItem);
+    while (nextHistory.length > historyLimit) {
+      nextHistory.shift();
+    }
+
+    params.sessionEntry.sessionId = target.sessionId;
+    params.sessionEntry.sessionFile = undefined;
+    params.sessionEntry.sessionHistory = nextHistory;
+    params.sessionEntry.totalTokens = undefined;
+    params.sessionEntry.inputTokens = undefined;
+    params.sessionEntry.outputTokens = undefined;
+    params.sessionEntry.contextTokens = undefined;
+    applyHistoryMetadata(params.sessionEntry, target.metadata);
+    await persistSessionEntry(params);
+
+    const preview = resolveSessionPreviewLine({
+      sessionId: target.sessionId,
+      storePath: params.storePath,
+      agentId: params.agentId,
+    });
+    const switchIndex = allItems.findIndex((item) => item.sessionId === target.sessionId);
+    const lines = [
+      `🔄 Switched to session #${switchIndex >= 0 ? switchIndex + 1 : "?"} (${target.sessionId.slice(0, 8)}).`,
+    ];
+    if (preview) {
+      lines.push("", `Recent: ${preview}`);
+    }
+
+    return {
+      shouldContinue: false,
+      reply: { text: lines.join("\n") },
     };
   }
 

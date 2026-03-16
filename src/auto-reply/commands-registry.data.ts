@@ -273,24 +273,30 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "session",
       nativeName: "session",
-      description: "Manage session-level settings (for example /session idle).",
+      description: "Switch sessions or manage session-level settings.",
       textAlias: "/session",
       category: "session",
       args: [
         {
-          name: "action",
-          description: "idle | max-age",
+          name: "target",
+          description: "number | sessionId | back | idle | max-age",
           type: "string",
-          choices: ["idle", "max-age"],
         },
         {
           name: "value",
-          description: "Duration (24h, 90m) or off",
+          description: "Duration (24h, 90m) or off for idle/max-age",
           type: "string",
           captureRemaining: true,
         },
       ],
       argsMenu: "auto",
+    }),
+    defineChatCommand({
+      key: "sessions",
+      nativeName: "sessions",
+      description: "List available sessions for the current chat.",
+      textAlias: "/sessions",
+      category: "session",
     }),
     defineChatCommand({
       key: "subagents",
