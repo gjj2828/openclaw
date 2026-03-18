@@ -81,6 +81,9 @@ function pushSessionHistory(
       modelOverride: sessionEntry.modelOverride,
       providerOverride: sessionEntry.providerOverride,
       label: sessionEntry.label,
+      compactionCount: sessionEntry.compactionCount,
+      memoryFlushAt: sessionEntry.memoryFlushAt,
+      memoryFlushCompactionCount: sessionEntry.memoryFlushCompactionCount,
     },
   };
 

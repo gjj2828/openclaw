@@ -69,6 +69,9 @@ function buildSessionHistoryItem(entry: SessionEntry): SessionHistoryItem {
       modelOverride: entry.modelOverride,
       providerOverride: entry.providerOverride,
       label: entry.label,
+      compactionCount: entry.compactionCount,
+      memoryFlushAt: entry.memoryFlushAt,
+      memoryFlushCompactionCount: entry.memoryFlushCompactionCount,
     },
   };
 }
@@ -96,6 +99,9 @@ function buildSwitchableSessionList(entry: SessionEntry): Array<{
         modelOverride: entry.modelOverride,
         providerOverride: entry.providerOverride,
         label: entry.label,
+        compactionCount: entry.compactionCount,
+        memoryFlushAt: entry.memoryFlushAt,
+        memoryFlushCompactionCount: entry.memoryFlushCompactionCount,
       },
     },
     ...history.map((item) => ({
@@ -151,6 +157,9 @@ function applyHistoryMetadata(
   entry.modelOverride = metadata?.modelOverride;
   entry.providerOverride = metadata?.providerOverride;
   entry.label = metadata?.label;
+  entry.compactionCount = metadata?.compactionCount ?? 0;
+  entry.memoryFlushAt = metadata?.memoryFlushAt;
+  entry.memoryFlushCompactionCount = metadata?.memoryFlushCompactionCount;
 }
 
 function hydrateSessionUsageAfterSwitch(params: {

@@ -78,6 +78,9 @@ export type SessionHistoryItemMetadata = {
   modelOverride?: string;
   providerOverride?: string;
   label?: string;
+  compactionCount?: number;
+  memoryFlushAt?: number;
+  memoryFlushCompactionCount?: number;
 };
 
 /**

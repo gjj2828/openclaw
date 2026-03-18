@@ -412,7 +412,17 @@ describe("/session switch usage hydration", () => {
         cacheRead: 900,
         cacheWrite: 90,
         contextTokens: 32_000,
-        sessionHistory: [{ sessionId: targetSessionId, createdAt: now - 1_000, metadata: {} }],
+        sessionHistory: [
+          {
+            sessionId: targetSessionId,
+            createdAt: now - 1_000,
+            metadata: {
+              compactionCount: 1,
+              memoryFlushCompactionCount: 1,
+              memoryFlushAt: now - 500,
+            },
+          },
+        ],
       };
       params.sessionStore = { [params.sessionKey]: params.sessionEntry };
 
@@ -420,9 +430,9 @@ describe("/session switch usage hydration", () => {
 
       expect(result?.reply?.text).toContain("Switched to session #2");
       expect(params.sessionEntry.sessionId).toBe(targetSessionId);
-      expect(params.sessionEntry.compactionCount).toBe(0);
-      expect(params.sessionEntry.memoryFlushCompactionCount).toBeUndefined();
-      expect(params.sessionEntry.memoryFlushAt).toBeUndefined();
+      expect(params.sessionEntry.compactionCount).toBe(1);
+      expect(params.sessionEntry.memoryFlushCompactionCount).toBe(1);
+      expect(params.sessionEntry.memoryFlushAt).toBe(now - 500);
       expect(params.sessionEntry.inputTokens).toBe(0);
       expect(params.sessionEntry.outputTokens).toBe(0);
       expect(params.sessionEntry.cacheRead).toBe(1200);
