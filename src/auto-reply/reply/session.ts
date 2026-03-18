@@ -59,10 +59,13 @@ const DEFAULT_SESSION_HISTORY_LIMIT = 5;
  * Push the current sessionId into the session history queue (LRU).
  * Captures a metadata snapshot so settings can be restored when switching back.
  */
-function pushSessionHistory(sessionEntry: SessionEntry, historyLimit: number): void {
+function pushSessionHistory(
+  sessionEntry: SessionEntry,
+  historyLimit: number,
+): SessionHistoryItem[] {
   const currentId = sessionEntry.sessionId;
   if (!currentId) {
-    return;
+    return [];
   }
 
   const item: SessionHistoryItem = {
@@ -87,11 +90,16 @@ function pushSessionHistory(sessionEntry: SessionEntry, historyLimit: number): v
   history.push(item);
 
   // Evict oldest entries (queue head) when over limit.
+  const evicted: SessionHistoryItem[] = [];
   while (history.length > historyLimit) {
-    history.shift();
+    const removed = history.shift();
+    if (removed) {
+      evicted.push(removed);
+    }
   }
 
   sessionEntry.sessionHistory = history;
+  return evicted;
 }
 
 export type SessionInitResult = {
@@ -565,13 +573,14 @@ export async function initSessionState(params: {
     activeSessionKey: sessionKey,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
+  let evictedFromHistory: SessionHistoryItem[] = [];
   if (isNewSession) {
     if (previousSessionEntry?.sessionId) {
       const historyCarrier: SessionEntry = {
         ...previousSessionEntry,
         sessionHistory: [...(previousSessionEntry.sessionHistory ?? [])],
       };
-      pushSessionHistory(historyCarrier, historyLimit);
+      evictedFromHistory = pushSessionHistory(historyCarrier, historyLimit);
       sessionEntry.sessionHistory = historyCarrier.sessionHistory;
     }
     sessionEntry.compactionCount = 0;
@@ -607,12 +616,23 @@ export async function initSessionState(params: {
     },
   );
 
-  // Archive old transcript so it doesn't accumulate on disk (#14869).
-  if (previousSessionEntry?.sessionId) {
+  // Archive transcripts for sessions evicted from the LRU history queue.
+  // Sessions still in history are NOT archived so users can switch back to them.
+  // When historyLimit is 0 (history disabled), archive the previous session
+  // unconditionally to preserve the original cleanup behavior (#14869).
+  if (historyLimit === 0 && previousSessionEntry?.sessionId) {
     archiveSessionTranscripts({
       sessionId: previousSessionEntry.sessionId,
       storePath,
       sessionFile: previousSessionEntry.sessionFile,
+      agentId,
+      reason: "reset",
+    });
+  }
+  for (const evicted of evictedFromHistory) {
+    archiveSessionTranscripts({
+      sessionId: evicted.sessionId,
+      storePath,
       agentId,
       reason: "reset",
     });

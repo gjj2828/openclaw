@@ -17,6 +17,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import type { SessionEntry, SessionHistoryItem } from "../../config/sessions.js";
 import { readSessionPreviewItemsFromTranscript } from "../../gateway/session-utils.fs.js";
+import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { formatRelativeTimestamp } from "../../infra/format-time/format-relative.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -490,10 +491,12 @@ export const handleSessionsListCommand: CommandHandler = async (params, allowTex
     if (when) {
       parts.push(`(${when})`);
     }
-    lines.push(parts.filter(Boolean).join(" "));
     if (preview) {
-      lines.push(`   ${preview}`);
+      // Collapse whitespace/newlines, trim, and truncate to 20 chars for a compact single-line display.
+      const compactPreview = preview.replace(/[\r\n]+/g, " ").trim();
+      parts.push(compactPreview.length > 20 ? `${compactPreview.slice(0, 20)}…` : compactPreview);
     }
+    lines.push(parts.filter(Boolean).join(" "));
   }
   if (items.length <= 1) {
     lines.push("   No previous sessions yet. Use /new to start another one.");
@@ -587,7 +590,15 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     );
     nextHistory.push(currentItem);
     while (nextHistory.length > historyLimit) {
-      nextHistory.shift();
+      const removed = nextHistory.shift();
+      if (removed) {
+        archiveSessionTranscripts({
+          sessionId: removed.sessionId,
+          storePath: params.storePath,
+          agentId: params.agentId,
+          reason: "reset",
+        });
+      }
     }
 
     params.sessionEntry.sessionId = target.sessionId;
