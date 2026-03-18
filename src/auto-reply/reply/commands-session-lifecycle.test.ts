@@ -388,11 +388,11 @@ describe("/session switch usage hydration", () => {
         dir: tmpDir,
         sessionId: targetSessionId,
         usage: {
-          input: 2,
-          output: 3,
+          input: 0,
+          output: 0,
           cacheRead: 1200,
-          cacheWrite: 7,
-          totalTokens: 1212,
+          cacheWrite: 0,
+          totalTokens: 1200,
         },
       });
 
@@ -402,6 +402,9 @@ describe("/session switch usage hydration", () => {
       params.sessionEntry = {
         sessionId: "session-current",
         updatedAt: now,
+        compactionCount: 3,
+        memoryFlushCompactionCount: 3,
+        memoryFlushAt: now,
         totalTokens: 999,
         totalTokensFresh: true,
         inputTokens: 100,
@@ -417,11 +420,14 @@ describe("/session switch usage hydration", () => {
 
       expect(result?.reply?.text).toContain("Switched to session #2");
       expect(params.sessionEntry.sessionId).toBe(targetSessionId);
-      expect(params.sessionEntry.inputTokens).toBe(2);
-      expect(params.sessionEntry.outputTokens).toBe(3);
+      expect(params.sessionEntry.compactionCount).toBe(0);
+      expect(params.sessionEntry.memoryFlushCompactionCount).toBeUndefined();
+      expect(params.sessionEntry.memoryFlushAt).toBeUndefined();
+      expect(params.sessionEntry.inputTokens).toBe(0);
+      expect(params.sessionEntry.outputTokens).toBe(0);
       expect(params.sessionEntry.cacheRead).toBe(1200);
-      expect(params.sessionEntry.cacheWrite).toBe(7);
-      expect(params.sessionEntry.totalTokens).toBe(1209);
+      expect(params.sessionEntry.cacheWrite).toBe(0);
+      expect(params.sessionEntry.totalTokens).toBe(1200);
       expect(params.sessionEntry.totalTokensFresh).toBe(true);
       expect(
         params.sessionEntry.contextTokens === undefined || params.sessionEntry.contextTokens > 0,
@@ -440,6 +446,9 @@ describe("/session switch usage hydration", () => {
       params.sessionEntry = {
         sessionId: "session-current",
         updatedAt: now,
+        compactionCount: 5,
+        memoryFlushCompactionCount: 5,
+        memoryFlushAt: now,
         totalTokens: 999,
         totalTokensFresh: true,
         inputTokens: 100,
@@ -454,6 +463,9 @@ describe("/session switch usage hydration", () => {
       await handleSessionCommand(params, true);
 
       expect(params.sessionEntry.sessionId).toBe("session-old");
+      expect(params.sessionEntry.compactionCount).toBe(0);
+      expect(params.sessionEntry.memoryFlushCompactionCount).toBeUndefined();
+      expect(params.sessionEntry.memoryFlushAt).toBeUndefined();
       expect(params.sessionEntry.inputTokens).toBeUndefined();
       expect(params.sessionEntry.outputTokens).toBeUndefined();
       expect(params.sessionEntry.cacheRead).toBeUndefined();
