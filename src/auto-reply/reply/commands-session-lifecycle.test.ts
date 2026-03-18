@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -345,5 +348,121 @@ describe("/session idle and /session max-age", () => {
 
     expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
     expect(result?.reply?.text).toContain("Only owner-1 can update session lifecycle settings");
+  });
+});
+
+function writeSessionUsageLog(params: {
+  dir: string;
+  sessionId: string;
+  usage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+  };
+  model?: string;
+}): void {
+  const logPath = path.join(params.dir, `${params.sessionId}.jsonl`);
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.writeFileSync(
+    logPath,
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        model: params.model ?? "anthropic/claude-opus-4-5",
+        usage: params.usage,
+      },
+    }),
+    "utf-8",
+  );
+}
+
+describe("/session switch usage hydration", () => {
+  it("hydrates usage snapshot from transcript after switching back", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-switch-"));
+    try {
+      const targetSessionId = "session-old";
+      writeSessionUsageLog({
+        dir: tmpDir,
+        sessionId: targetSessionId,
+        usage: {
+          input: 2,
+          output: 3,
+          cacheRead: 1200,
+          cacheWrite: 7,
+          totalTokens: 1212,
+        },
+      });
+
+      const params = buildCommandTestParams("/session back", baseCfg);
+      const now = Date.now();
+      params.storePath = path.join(tmpDir, "sessions.json");
+      params.sessionEntry = {
+        sessionId: "session-current",
+        updatedAt: now,
+        totalTokens: 999,
+        totalTokensFresh: true,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheRead: 900,
+        cacheWrite: 90,
+        contextTokens: 32_000,
+        sessionHistory: [{ sessionId: targetSessionId, createdAt: now - 1_000, metadata: {} }],
+      };
+      params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+      const result = await handleSessionCommand(params, true);
+
+      expect(result?.reply?.text).toContain("Switched to session #2");
+      expect(params.sessionEntry.sessionId).toBe(targetSessionId);
+      expect(params.sessionEntry.inputTokens).toBe(2);
+      expect(params.sessionEntry.outputTokens).toBe(3);
+      expect(params.sessionEntry.cacheRead).toBe(1200);
+      expect(params.sessionEntry.cacheWrite).toBe(7);
+      expect(params.sessionEntry.totalTokens).toBe(1209);
+      expect(params.sessionEntry.totalTokensFresh).toBe(true);
+      expect(
+        params.sessionEntry.contextTokens === undefined || params.sessionEntry.contextTokens > 0,
+      ).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears stale usage snapshot when transcript is unavailable", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-switch-"));
+    try {
+      const params = buildCommandTestParams("/session back", baseCfg);
+      const now = Date.now();
+      params.storePath = path.join(tmpDir, "sessions.json");
+      params.sessionEntry = {
+        sessionId: "session-current",
+        updatedAt: now,
+        totalTokens: 999,
+        totalTokensFresh: true,
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheRead: 900,
+        cacheWrite: 90,
+        contextTokens: 32_000,
+        sessionHistory: [{ sessionId: "session-old", createdAt: now - 1_000, metadata: {} }],
+      };
+      params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+      await handleSessionCommand(params, true);
+
+      expect(params.sessionEntry.sessionId).toBe("session-old");
+      expect(params.sessionEntry.inputTokens).toBeUndefined();
+      expect(params.sessionEntry.outputTokens).toBeUndefined();
+      expect(params.sessionEntry.cacheRead).toBeUndefined();
+      expect(params.sessionEntry.cacheWrite).toBeUndefined();
+      expect(params.sessionEntry.totalTokens).toBeUndefined();
+      expect(params.sessionEntry.totalTokensFresh).toBe(false);
+      expect(params.sessionEntry.contextTokens).toBeUndefined();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

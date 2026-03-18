@@ -12,9 +12,11 @@ import {
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "../../../extensions/telegram/src/thread-bindings.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry, SessionHistoryItem } from "../../config/sessions.js";
 import { readSessionPreviewItemsFromTranscript } from "../../gateway/session-utils.fs.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
@@ -27,6 +29,7 @@ import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/sessio
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
+import { readSessionTranscriptUsage } from "../session-transcript-usage.js";
 import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
 import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./channel-context.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
@@ -148,6 +151,50 @@ function applyHistoryMetadata(
   entry.modelOverride = metadata?.modelOverride;
   entry.providerOverride = metadata?.providerOverride;
   entry.label = metadata?.label;
+}
+
+function hydrateSessionUsageAfterSwitch(params: {
+  entry: SessionEntry;
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  storePath?: string;
+  agentId?: string;
+}): void {
+  const usage = readSessionTranscriptUsage({
+    sessionId: params.entry.sessionId,
+    sessionEntry: params.entry,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    agentId: params.agentId,
+  });
+
+  if (!usage) {
+    params.entry.totalTokensFresh = false;
+    return;
+  }
+
+  params.entry.inputTokens = usage.input;
+  params.entry.outputTokens = usage.output;
+  params.entry.cacheRead = usage.cacheRead;
+  params.entry.cacheWrite = usage.cacheWrite;
+
+  const promptTokens = usage.promptTokens || usage.total;
+  if (promptTokens > 0) {
+    params.entry.totalTokens = promptTokens;
+    params.entry.totalTokensFresh = true;
+  } else {
+    params.entry.totalTokens = undefined;
+    params.entry.totalTokensFresh = false;
+  }
+
+  if (!params.entry.contextTokens && usage.model) {
+    params.entry.contextTokens =
+      resolveContextTokensForModel({
+        cfg: params.cfg,
+        model: usage.model,
+        fallbackContextTokens: params.entry.contextTokens ?? undefined,
+      }) ?? params.entry.contextTokens;
+  }
 }
 
 function parseSessionDurationMs(raw: string): number {
@@ -605,10 +652,20 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
     params.sessionEntry.sessionFile = undefined;
     params.sessionEntry.sessionHistory = nextHistory;
     params.sessionEntry.totalTokens = undefined;
+    params.sessionEntry.totalTokensFresh = false;
     params.sessionEntry.inputTokens = undefined;
     params.sessionEntry.outputTokens = undefined;
+    params.sessionEntry.cacheRead = undefined;
+    params.sessionEntry.cacheWrite = undefined;
     params.sessionEntry.contextTokens = undefined;
     applyHistoryMetadata(params.sessionEntry, target.metadata);
+    hydrateSessionUsageAfterSwitch({
+      entry: params.sessionEntry,
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      agentId: params.agentId,
+    });
     await persistSessionEntry(params);
 
     const preview = resolveSessionPreviewLine({

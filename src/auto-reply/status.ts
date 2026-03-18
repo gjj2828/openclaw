@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
@@ -9,22 +8,14 @@ import {
 } from "../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
-import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  resolveMainSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  type SessionEntry,
-  type SessionScope,
-} from "../config/sessions.js";
+import { resolveMainSessionKey, type SessionEntry, type SessionScope } from "../config/sessions.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { listPluginCommands } from "../plugins/commands.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   getTtsMaxLength,
   getTtsProvider,
@@ -48,6 +39,7 @@ import {
 import type { CommandCategory } from "./commands-registry.types.js";
 import { resolveActiveFallbackState } from "./fallback-state.js";
 import { formatProviderModelRef, resolveSelectedAndActiveModel } from "./model-runtime.js";
+import { readSessionTranscriptUsage } from "./session-transcript-usage.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
@@ -206,102 +198,6 @@ const formatQueueDetails = (queue?: QueueStatus) => {
     detailParts.push(`drop ${queue.dropPolicy}`);
   }
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
-};
-
-const readUsageFromSessionLog = (
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  agentId?: string,
-  sessionKey?: string,
-  storePath?: string,
-):
-  | {
-      input: number;
-      output: number;
-      promptTokens: number;
-      total: number;
-      model?: string;
-    }
-  | undefined => {
-  // Transcripts are stored at the session file path (fallback: ~/.openclaw/sessions/<SessionId>.jsonl)
-  if (!sessionId) {
-    return undefined;
-  }
-  let logPath: string;
-  try {
-    const resolvedAgentId =
-      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-    logPath = resolveSessionFilePath(
-      sessionId,
-      sessionEntry,
-      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath }),
-    );
-  } catch {
-    return undefined;
-  }
-  if (!fs.existsSync(logPath)) {
-    return undefined;
-  }
-
-  try {
-    // Read the tail only; we only need the most recent usage entries.
-    const TAIL_BYTES = 8192;
-    const stat = fs.statSync(logPath);
-    const offset = Math.max(0, stat.size - TAIL_BYTES);
-    const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size));
-    const fd = fs.openSync(logPath, "r");
-    try {
-      fs.readSync(fd, buf, 0, buf.length, offset);
-    } finally {
-      fs.closeSync(fd);
-    }
-    const tail = buf.toString("utf-8");
-    const lines = (offset > 0 ? tail.slice(tail.indexOf("\n") + 1) : tail).split(/\n+/);
-
-    let input = 0;
-    let output = 0;
-    let promptTokens = 0;
-    let model: string | undefined;
-    let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
-
-    for (const line of lines) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const parsed = JSON.parse(line) as {
-          message?: {
-            usage?: UsageLike;
-            model?: string;
-          };
-          usage?: UsageLike;
-          model?: string;
-        };
-        const usageRaw = parsed.message?.usage ?? parsed.usage;
-        const usage = normalizeUsage(usageRaw);
-        if (usage) {
-          lastUsage = usage;
-        }
-        model = parsed.message?.model ?? parsed.model ?? model;
-      } catch {
-        // ignore bad lines (including a truncated first tail line)
-      }
-    }
-
-    if (!lastUsage) {
-      return undefined;
-    }
-    input = lastUsage.input ?? 0;
-    output = lastUsage.output ?? 0;
-    promptTokens = derivePromptTokens(lastUsage) ?? lastUsage.total ?? input + output;
-    const total = lastUsage.total ?? promptTokens + output;
-    if (promptTokens === 0 && total === 0) {
-      return undefined;
-    }
-    return { input, output, promptTokens, total, model };
-  } catch {
-    return undefined;
-  }
 };
 
 const formatUsagePair = (input?: number | null, output?: number | null) => {
@@ -465,13 +361,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(
-      entry?.sessionId,
-      entry,
-      args.agentId,
-      args.sessionKey,
-      args.sessionStorePath,
-    );
+    const logUsage = readSessionTranscriptUsage({
+      sessionId: entry?.sessionId,
+      sessionEntry: entry,
+      agentId: args.agentId,
+      sessionKey: args.sessionKey,
+      storePath: args.sessionStorePath,
+    });
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
