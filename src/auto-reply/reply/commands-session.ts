@@ -66,6 +66,16 @@ function buildSessionHistoryItem(entry: SessionEntry): SessionHistoryItem {
       modelOverride: entry.modelOverride,
       providerOverride: entry.providerOverride,
       label: entry.label,
+      inputTokens: entry.inputTokens,
+      outputTokens: entry.outputTokens,
+      cacheRead: entry.cacheRead,
+      cacheWrite: entry.cacheWrite,
+      totalTokens: entry.totalTokens,
+      totalTokensFresh: entry.totalTokensFresh,
+      contextTokens: entry.contextTokens,
+      compactionCount: entry.compactionCount,
+      memoryFlushAt: entry.memoryFlushAt,
+      memoryFlushCompactionCount: entry.memoryFlushCompactionCount,
     },
   };
 }
@@ -93,6 +103,16 @@ function buildSwitchableSessionList(entry: SessionEntry): Array<{
         modelOverride: entry.modelOverride,
         providerOverride: entry.providerOverride,
         label: entry.label,
+        inputTokens: entry.inputTokens,
+        outputTokens: entry.outputTokens,
+        cacheRead: entry.cacheRead,
+        cacheWrite: entry.cacheWrite,
+        totalTokens: entry.totalTokens,
+        totalTokensFresh: entry.totalTokensFresh,
+        contextTokens: entry.contextTokens,
+        compactionCount: entry.compactionCount,
+        memoryFlushAt: entry.memoryFlushAt,
+        memoryFlushCompactionCount: entry.memoryFlushCompactionCount,
       },
     },
     ...history.map((item) => ({
@@ -148,6 +168,16 @@ function applyHistoryMetadata(
   entry.modelOverride = metadata?.modelOverride;
   entry.providerOverride = metadata?.providerOverride;
   entry.label = metadata?.label;
+  entry.inputTokens = metadata?.inputTokens;
+  entry.outputTokens = metadata?.outputTokens;
+  entry.cacheRead = metadata?.cacheRead;
+  entry.cacheWrite = metadata?.cacheWrite;
+  entry.totalTokens = metadata?.totalTokens;
+  entry.totalTokensFresh = metadata?.totalTokensFresh ?? false;
+  entry.contextTokens = metadata?.contextTokens;
+  entry.compactionCount = metadata?.compactionCount ?? 0;
+  entry.memoryFlushAt = metadata?.memoryFlushAt;
+  entry.memoryFlushCompactionCount = metadata?.memoryFlushCompactionCount;
 }
 
 function parseSessionDurationMs(raw: string): number {

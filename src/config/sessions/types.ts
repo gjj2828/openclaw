@@ -78,6 +78,16 @@ export type SessionHistoryItemMetadata = {
   modelOverride?: string;
   providerOverride?: string;
   label?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+  totalTokensFresh?: boolean;
+  contextTokens?: number;
+  compactionCount?: number;
+  memoryFlushAt?: number;
+  memoryFlushCompactionCount?: number;
 };
 
 /**

@@ -347,3 +347,99 @@ describe("/session idle and /session max-age", () => {
     expect(result?.reply?.text).toContain("Only owner-1 can update session lifecycle settings");
   });
 });
+
+describe("/session switch snapshot restore", () => {
+  it("restores token + compaction snapshot from history", async () => {
+    const params = buildCommandTestParams("/session back", baseCfg);
+    const now = Date.now();
+    params.sessionEntry = {
+      sessionId: "session-current",
+      updatedAt: now,
+      inputTokens: 12,
+      outputTokens: 3,
+      cacheRead: 5,
+      cacheWrite: 1,
+      totalTokens: 18,
+      totalTokensFresh: true,
+      contextTokens: 200_000,
+      compactionCount: 2,
+      memoryFlushAt: now - 10_000,
+      memoryFlushCompactionCount: 2,
+      sessionHistory: [
+        {
+          sessionId: "session-old",
+          createdAt: now - 1_000,
+          metadata: {
+            inputTokens: 101,
+            outputTokens: 7,
+            cacheRead: 42,
+            cacheWrite: 0,
+            totalTokens: 143,
+            totalTokensFresh: true,
+            contextTokens: 128_000,
+            compactionCount: 4,
+            memoryFlushAt: now - 5_000,
+            memoryFlushCompactionCount: 4,
+          },
+        },
+      ],
+    };
+    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+    const result = await handleSessionCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Switched to session #2");
+    expect(params.sessionEntry.sessionId).toBe("session-old");
+    expect(params.sessionEntry.inputTokens).toBe(101);
+    expect(params.sessionEntry.outputTokens).toBe(7);
+    expect(params.sessionEntry.cacheRead).toBe(42);
+    expect(params.sessionEntry.cacheWrite).toBe(0);
+    expect(params.sessionEntry.totalTokens).toBe(143);
+    expect(params.sessionEntry.totalTokensFresh).toBe(true);
+    expect(params.sessionEntry.contextTokens).toBe(128_000);
+    expect(params.sessionEntry.compactionCount).toBe(4);
+    expect(params.sessionEntry.memoryFlushAt).toBe(now - 5_000);
+    expect(params.sessionEntry.memoryFlushCompactionCount).toBe(4);
+  });
+
+  it("clears snapshot fields when history metadata is missing", async () => {
+    const params = buildCommandTestParams("/session back", baseCfg);
+    const now = Date.now();
+    params.sessionEntry = {
+      sessionId: "session-current",
+      updatedAt: now,
+      inputTokens: 12,
+      outputTokens: 3,
+      cacheRead: 5,
+      cacheWrite: 1,
+      totalTokens: 18,
+      totalTokensFresh: true,
+      contextTokens: 200_000,
+      compactionCount: 2,
+      memoryFlushAt: now - 10_000,
+      memoryFlushCompactionCount: 2,
+      sessionHistory: [
+        {
+          sessionId: "session-old",
+          createdAt: now - 1_000,
+          metadata: {},
+        },
+      ],
+    };
+    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+    await handleSessionCommand(params, true);
+
+    expect(params.sessionEntry.sessionId).toBe("session-old");
+    expect(params.sessionEntry.inputTokens).toBeUndefined();
+    expect(params.sessionEntry.outputTokens).toBeUndefined();
+    expect(params.sessionEntry.cacheRead).toBeUndefined();
+    expect(params.sessionEntry.cacheWrite).toBeUndefined();
+    expect(params.sessionEntry.totalTokens).toBeUndefined();
+    expect(params.sessionEntry.totalTokensFresh).toBe(false);
+    expect(params.sessionEntry.contextTokens).toBeUndefined();
+    expect(params.sessionEntry.compactionCount).toBe(0);
+    expect(params.sessionEntry.memoryFlushAt).toBeUndefined();
+    expect(params.sessionEntry.memoryFlushCompactionCount).toBeUndefined();
+  });
+});
