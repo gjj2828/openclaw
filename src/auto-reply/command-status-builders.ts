@@ -1,6 +1,7 @@
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { isCommandFlagEnabled } from "../config/commands.flags.js";
+import { isGroupSessionKey, isThreadSessionKey } from "../config/sessions/reset.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import {
@@ -94,6 +95,7 @@ export type CommandsMessageOptions = {
   page?: number;
   surface?: string;
   forcePaginatedList?: boolean;
+  sessionKey?: string;
 };
 
 export type CommandsMessageResult = {
@@ -133,6 +135,16 @@ type CommandsListItem = {
   label: string;
   text: string;
 };
+
+function isOrdinaryDirectCommandsContext(options?: CommandsMessageOptions): boolean {
+  if (isThreadSessionKey(options?.sessionKey)) {
+    return false;
+  }
+  if (isGroupSessionKey(options?.sessionKey)) {
+    return false;
+  }
+  return true;
+}
 
 function buildCommandItems(
   commands: ChatCommandDefinition[],
@@ -201,9 +213,17 @@ export function buildCommandsMessagePaginated(
     options?.forcePaginatedList === true ||
     Boolean(surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData);
 
-  const commands = cfg
+  const allCommands = cfg
     ? listChatCommandsForConfig(cfg, { skillCommands })
     : listChatCommands({ skillCommands });
+
+  const commands = allCommands.filter((command) => {
+    if (command.key !== "sessions") {
+      return true;
+    }
+    return isOrdinaryDirectCommandsContext(options);
+  });
+
   const pluginCommands = listPluginCommands();
   const items = buildCommandItems(commands, pluginCommands);
 

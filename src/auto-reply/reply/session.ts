@@ -25,9 +25,12 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
+  buildSessionHistoryMetadata,
   DEFAULT_RESET_TRIGGERS,
+  DEFAULT_SESSION_HISTORY_LIMIT,
   type GroupKeyResolution,
   type SessionEntry,
+  type SessionHistoryItem,
   type SessionScope,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -147,6 +150,44 @@ function resolveStaleSessionEndReason(params: {
 function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
   return Boolean(provider && getCliSessionBinding(entry, provider));
+}
+
+/**
+ * Push the current sessionId into the session history queue (LRU).
+ * Captures a metadata snapshot so settings can be restored when switching back.
+ */
+function pushSessionHistory(
+  sessionEntry: SessionEntry,
+  historyLimit: number,
+): SessionHistoryItem[] {
+  const currentId = sessionEntry.sessionId;
+  if (!currentId) {
+    return [];
+  }
+
+  const item: SessionHistoryItem = {
+    sessionId: currentId,
+    sessionFile: sessionEntry.sessionFile,
+    createdAt: sessionEntry.updatedAt ?? Date.now(),
+    label: sessionEntry.label,
+    metadata: buildSessionHistoryMetadata(sessionEntry),
+  };
+
+  const history = sessionEntry.sessionHistory
+    ? sessionEntry.sessionHistory.filter((h) => h.sessionId !== currentId)
+    : [];
+  history.push(item);
+
+  const evicted: SessionHistoryItem[] = [];
+  while (history.length > historyLimit) {
+    const removed = history.shift();
+    if (removed) {
+      evicted.push(removed);
+    }
+  }
+
+  sessionEntry.sessionHistory = history;
+  return evicted;
 }
 
 export type SessionInitResult = {
@@ -275,6 +316,10 @@ export async function initSessionState(params: {
   const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
+  const historyLimit =
+    typeof sessionCfg?.historyLimit === "number" && Number.isFinite(sessionCfg.historyLimit)
+      ? Math.max(0, Math.floor(sessionCfg.historyLimit))
+      : DEFAULT_SESSION_HISTORY_LIMIT;
   const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
@@ -746,7 +791,18 @@ export async function initSessionState(params: {
     maintenanceConfig,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
+  let evictedFromHistory: SessionHistoryItem[] = [];
   if (isNewSession) {
+    if (previousSessionEntry?.sessionId && historyLimit > 0) {
+      const historyCarrier: SessionEntry = {
+        ...previousSessionEntry,
+        sessionHistory: [...(previousSessionEntry.sessionHistory ?? [])],
+      };
+      evictedFromHistory = pushSessionHistory(historyCarrier, historyLimit);
+      sessionEntry.sessionHistory = historyCarrier.sessionHistory;
+    } else if (historyLimit === 0) {
+      sessionEntry.sessionHistory = [];
+    }
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
@@ -785,14 +841,14 @@ export async function initSessionState(params: {
     },
   );
 
+  const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
+    await loadSessionArchiveRuntime();
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   let previousSessionTranscript: {
     sessionFile?: string;
     transcriptArchived?: boolean;
   } = {};
-  if (previousSessionEntry?.sessionId) {
-    const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
-      await loadSessionArchiveRuntime();
+  if (historyLimit === 0 && previousSessionEntry?.sessionId) {
     const archivedTranscripts = archiveSessionTranscriptsDetailed({
       sessionId: previousSessionEntry.sessionId,
       storePath,
@@ -827,6 +883,15 @@ export async function initSessionState(params: {
       onWarn: (message) => log.warn(message),
     }).catch((error) => {
       log.warn(`browser tab cleanup failed: ${String(error)}`);
+    });
+  }
+  for (const evicted of evictedFromHistory) {
+    archiveSessionTranscriptsDetailed({
+      sessionId: evicted.sessionId,
+      storePath,
+      sessionFile: evicted.sessionFile,
+      agentId,
+      reason: "reset",
     });
   }
 

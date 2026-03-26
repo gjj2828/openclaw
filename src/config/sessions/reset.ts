@@ -24,6 +24,14 @@ export function isThreadSessionKey(sessionKey?: string | null): boolean {
   return Boolean(resolveLoadedSessionThreadInfo(sessionKey).threadId);
 }
 
+export function isGroupSessionKey(sessionKey?: string | null): boolean {
+  const normalized = (sessionKey ?? "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return GROUP_SESSION_MARKERS.some((marker) => normalized.includes(marker));
+}
+
 export function resolveSessionResetType(params: {
   sessionKey?: string | null;
   isGroup?: boolean;

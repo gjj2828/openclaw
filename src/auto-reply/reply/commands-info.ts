@@ -67,6 +67,7 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   const paginated = buildCommandsMessagePaginated(params.cfg, skillCommands, {
     page: 1,
     surface,
+    sessionKey: params.sessionKey,
   });
   const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({
     currentPage: paginated.currentPage,
@@ -85,7 +86,12 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
 
   return {
     shouldContinue: false,
-    reply: { text: buildCommandsMessage(params.cfg, skillCommands, { surface }) },
+    reply: {
+      text: buildCommandsMessage(params.cfg, skillCommands, {
+        surface,
+        sessionKey: params.sessionKey,
+      }),
+    },
   };
 };
 
