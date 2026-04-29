@@ -848,20 +848,22 @@ export async function initSessionState(params: {
     sessionFile?: string;
     transcriptArchived?: boolean;
   } = {};
-  if (historyLimit === 0 && previousSessionEntry?.sessionId) {
-    const archivedTranscripts = archiveSessionTranscriptsDetailed({
-      sessionId: previousSessionEntry.sessionId,
-      storePath,
-      sessionFile: previousSessionEntry.sessionFile,
-      agentId,
-      reason: "reset",
-    });
+  if (previousSessionEntry?.sessionId) {
+    if (historyLimit === 0) {
+      archiveSessionTranscriptsDetailed({
+        sessionId: previousSessionEntry.sessionId,
+        storePath,
+        sessionFile: previousSessionEntry.sessionFile,
+        agentId,
+        reason: "reset",
+      });
+    }
     previousSessionTranscript = resolveStableSessionEndTranscript({
       sessionId: previousSessionEntry.sessionId,
       storePath,
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
-      archivedTranscripts,
+      archivedTranscripts: [],
     });
     await retireSessionMcpRuntime({
       sessionId: previousSessionEntry.sessionId,
